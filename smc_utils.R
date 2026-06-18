@@ -121,25 +121,36 @@ adaptive_epsilon <- function(log_ratio_fn,
 }
 
 # ------------------------------------------------------------------
-# Weighted mean / covariance of a population of particles.
+# Weighted mean and weighted *sample* covariance of a population of
+# particles.
 #
 # 'particles' is a list, each element a numeric vector (length d; d = 1
 # for scalar theta).  'weights' are non-negative and need not be
-# normalised.  Returns the weighted mean, the weighted covariance
-# matrix (d x d) and the per-component weighted standard deviations.
+# normalised.  The covariance uses the unbiased weighted-sample
+# estimator (as in stats::cov.wt, method = "unbiased"):
+#
+#   Sigma = ( sum_m w_m (x_m - mu)(x_m - mu)^T ) / ( 1 - sum_m w_m^2 ),
+#
+# with the weights w_m normalised to sum to one.  Returns the weighted
+# mean, the d x d weighted sample covariance, and the per-component
+# weighted standard deviations.
 # ------------------------------------------------------------------
 weighted_moments <- function(particles, weights) {
   X  <- do.call(rbind, lapply(particles, as.numeric))   # N x d
   w  <- weights / sum(weights)
   mu <- colSums(w * X)
   Xc <- sweep(X, 2L, mu)
-  Sigma <- crossprod(Xc, w * Xc)                         # sum_m w_m Xc_m Xc_m^T
+  denom <- 1 - sum(w^2)                                  # unbiased correction
+  if (denom < 1e-8) denom <- 1                           # guard weight collapse
+  Sigma <- crossprod(Xc, w * Xc) / denom                 # weighted sample cov.
   list(mean = mu, cov = Sigma, sd = sqrt(pmax(diag(Sigma), 0)))
 }
 
 # ------------------------------------------------------------------
-# Build a symmetric Gaussian random-walk proposal with a given
-# covariance matrix:  theta* = theta + L z,  z ~ N(0, I),  L L^T = cov.
+# Build a symmetric multivariate-Gaussian random-walk proposal with a
+# given covariance matrix:  theta* = theta + L z,  z ~ N(0, I_d),
+# L L^T = cov.  This is a genuine multivariate proposal: off-diagonal
+# (cross-component) correlations of 'cov' are respected via L.
 #
 # Because the covariance is held fixed across the move step, the
 # proposal is symmetric and its density cancels in the MH acceptance

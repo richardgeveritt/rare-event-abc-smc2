@@ -81,13 +81,15 @@ MCMC sweeps, South et al. 2019, `c = 0.2`), `resample_scheme`
 ### Adaptive theta proposal
 
 By default (`adapt_theta_proposal = TRUE`) the Metropolis–Hastings move on
-`theta` uses a Gaussian random walk whose covariance is the **weighted
-covariance of the theta-population, measured just before the resampling
-step** (the weighted standard deviation per component, with cross-component
-correlations preserved via a Cholesky factor). The scale is held fixed for
-the whole move step, so the proposal is symmetric and `model$rproposal` /
-`model$dproposal` are **not used** in this mode. `proposal_scale`
-multiplies the weighted sd (default `1`, i.e. exactly the weighted sd).
+`theta` uses a **multivariate** Gaussian random walk whose covariance is
+the **weighted sample covariance of the theta-population, measured just
+before the resampling step** (the unbiased weighted-sample estimator, as in
+`stats::cov.wt`; full covariance matrix, so cross-component correlations are
+respected via a Cholesky factor). The scale is held fixed for the whole
+move step, so the proposal is symmetric and `model$rproposal` /
+`model$dproposal` are **not used** in this mode. `proposal_scale` multiplies
+the proposal standard deviations (default `1`, i.e. exactly the weighted
+sample covariance; `proposal_scale^2` multiplies the covariance).
 
 Set `adapt_theta_proposal = FALSE` to fall back to the model-supplied
 `rproposal`/`dproposal` instead.
