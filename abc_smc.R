@@ -38,15 +38,27 @@ source("R/smc_utils.R")
 # One ABC-MCMC step on a single theta-particle (lines 4-7 of
 # algorithm abc-mcmc, used as the SMC move kernel K_t).  The current
 # likelihood estimate is cached and passed/returned to avoid recompute.
+#
+# If 'rprop' is supplied it is used as a *symmetric* proposal (e.g. the
+# adaptive Gaussian random walk whose covariance is the weighted
+# covariance of the population): its density then cancels in the MH
+# ratio.  Otherwise the model's own rproposal/dproposal are used.
 # ------------------------------------------------------------------
-.abc_mcmc_step <- function(theta, x_list, log_lhat_cur, epsilon, Nx, model) {
-  theta_prop <- model$rproposal(theta)
+.abc_mcmc_step <- function(theta, x_list, log_lhat_cur, epsilon, Nx, model,
+                           rprop = NULL) {
+  if (is.null(rprop)) {
+    theta_prop <- model$rproposal(theta)
+    log_q_ratio <- model$dproposal(theta, theta_prop) -
+                   model$dproposal(theta_prop, theta)
+  } else {
+    theta_prop  <- rprop(theta)
+    log_q_ratio <- 0                       # symmetric proposal
+  }
   x_prop     <- model$simulate(theta_prop, Nx)
   log_lhat_prop <- .abc_log_lhat(x_prop, epsilon, model)
 
   log_alpha <- (model$dprior(theta_prop) - model$dprior(theta)) +
-               (model$dproposal(theta, theta_prop) -
-                model$dproposal(theta_prop, theta)) +
+               log_q_ratio +
                (log_lhat_prop - log_lhat_cur)
 
   if (log(runif(1)) < log_alpha) {
@@ -79,6 +91,8 @@ abc_smc <- function(model,
                     adapt_nmoves     = TRUE,
                     c_move           = 0.2,
                     max_moves        = 100L,
+                    adapt_theta_proposal = TRUE,  # adaptive Gaussian RW on theta
+                    proposal_scale       = 1,     # multiplies the weighted sd
                     verbose          = FALSE) {
 
   adaptive <- is.null(epsilon_schedule)
@@ -146,6 +160,13 @@ abc_smc <- function(model,
     ## --- resample & move if degenerate (lines 9-12) ---------------
     acc_rate <- NA_real_
     if (ess < alpha * N_theta) {
+      ## adaptive proposal: weighted covariance of theta *before*
+      ## resampling (i.e. using the current normalised weights).
+      rprop <- if (adapt_theta_proposal) {
+        wm <- weighted_moments(theta, exp(log_w))
+        make_gaussian_rw_proposal(wm$cov, scale = proposal_scale)
+      } else NULL
+
       anc      <- resample(log_w, resample_scheme)
       theta    <- theta[anc]
       x        <- x[anc]
@@ -157,7 +178,7 @@ abc_smc <- function(model,
         acc <- 0L
         for (m in seq_len(N_theta)) {
           res <- .abc_mcmc_step(theta[[m]], x[[m]], log_lhat_t[m],
-                                eps_t, Nx, model)
+                                eps_t, Nx, model, rprop = rprop)
           theta[[m]]    <<- res$theta
           x[[m]]        <<- res$x
           log_lhat_t[m] <<- res$log_lhat

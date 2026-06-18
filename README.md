@@ -29,10 +29,13 @@ observed data `y` is captured inside the kernel/`H` closures.
 |-------|-----------|---------|
 | `rprior(N)`             | N → list           | `N` draws `θ ~ p` |
 | `dprior(θ)`             | θ → scalar         | `log p(θ)` |
-| `rproposal(θ)`          | θ → θ*             | proposed `θ* ~ q(·\|θ)` |
-| `dproposal(to, from)`   | (θ,θ) → scalar     | `log q(to\|from)` |
+| `rproposal(θ)` †        | θ → θ*             | proposed `θ* ~ q(·\|θ)` |
+| `dproposal(to, from)` † | (θ,θ) → scalar     | `log q(to\|from)` |
 | `simulate(θ, Nx)`       | (θ,Nx) → list      | `Nx` draws `x ~ f(·\|θ)` |
 | `log_abc_kernel(x, ε)`  | (x,ε) → scalar     | `log P_ε(y\|x)` |
+
+† Only needed when `adapt_theta_proposal = FALSE`; the default adaptive
+proposal (see below) supplies its own symmetric Gaussian random walk.
 
 ### Needed by **rare event SMC** and **RE-ABC-SMC²** (reparameterised model)
 
@@ -74,6 +77,20 @@ Common arguments: `alpha` (resample when `ESS < alpha·N`), `beta` (target
 CESS fraction), `adapt_nmoves`/`c_move`/`max_moves` (adaptive number of
 MCMC sweeps, South et al. 2019, `c = 0.2`), `resample_scheme`
 (`"multinomial"` as in the paper, or `"systematic"`).
+
+### Adaptive theta proposal
+
+By default (`adapt_theta_proposal = TRUE`) the Metropolis–Hastings move on
+`theta` uses a Gaussian random walk whose covariance is the **weighted
+covariance of the theta-population, measured just before the resampling
+step** (the weighted standard deviation per component, with cross-component
+correlations preserved via a Cholesky factor). The scale is held fixed for
+the whole move step, so the proposal is symmetric and `model$rproposal` /
+`model$dproposal` are **not used** in this mode. `proposal_scale`
+multiplies the weighted sd (default `1`, i.e. exactly the weighted sd).
+
+Set `adapt_theta_proposal = FALSE` to fall back to the model-supplied
+`rproposal`/`dproposal` instead.
 
 Return value (named list): `theta` (list of particles), `weights`,
 `log_evidence` (model-evidence estimate), `epsilon`/`epsilon_schedule`,

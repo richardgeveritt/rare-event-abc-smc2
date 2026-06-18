@@ -121,6 +121,41 @@ adaptive_epsilon <- function(log_ratio_fn,
 }
 
 # ------------------------------------------------------------------
+# Weighted mean / covariance of a population of particles.
+#
+# 'particles' is a list, each element a numeric vector (length d; d = 1
+# for scalar theta).  'weights' are non-negative and need not be
+# normalised.  Returns the weighted mean, the weighted covariance
+# matrix (d x d) and the per-component weighted standard deviations.
+# ------------------------------------------------------------------
+weighted_moments <- function(particles, weights) {
+  X  <- do.call(rbind, lapply(particles, as.numeric))   # N x d
+  w  <- weights / sum(weights)
+  mu <- colSums(w * X)
+  Xc <- sweep(X, 2L, mu)
+  Sigma <- crossprod(Xc, w * Xc)                         # sum_m w_m Xc_m Xc_m^T
+  list(mean = mu, cov = Sigma, sd = sqrt(pmax(diag(Sigma), 0)))
+}
+
+# ------------------------------------------------------------------
+# Build a symmetric Gaussian random-walk proposal with a given
+# covariance matrix:  theta* = theta + L z,  z ~ N(0, I),  L L^T = cov.
+#
+# Because the covariance is held fixed across the move step, the
+# proposal is symmetric and its density cancels in the MH acceptance
+# ratio, so only the sampler is needed.  A small jitter keeps the
+# Cholesky factor well-defined when the covariance is (near-)singular.
+# ------------------------------------------------------------------
+make_gaussian_rw_proposal <- function(cov, scale = 1) {
+  cov <- scale^2 * as.matrix(cov)
+  d   <- nrow(cov)
+  jitter <- 1e-12 * max(diag(cov), 1)
+  L <- tryCatch(t(chol(cov + diag(jitter, d))),
+                error = function(e) diag(sqrt(pmax(diag(cov), 0)), d))
+  function(theta) as.numeric(theta) + as.numeric(L %*% rnorm(d))
+}
+
+# ------------------------------------------------------------------
 # Adaptive number of MCMC sweeps (South et al. 2019):
 #
 #   ceil( log(c) / log(1 - p_acc) )

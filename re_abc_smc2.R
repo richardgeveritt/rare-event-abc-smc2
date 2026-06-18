@@ -63,6 +63,8 @@ re_abc_smc2 <- function(model,
                         adapt_nmoves     = TRUE,
                         c_move           = 0.2,
                         max_moves        = 100L,
+                        adapt_theta_proposal = TRUE,  # adaptive Gaussian RW on theta
+                        proposal_scale       = 1,     # multiplies the weighted sd
                         verbose          = FALSE) {
 
   adaptive <- is.null(epsilon_schedule)
@@ -138,6 +140,13 @@ re_abc_smc2 <- function(model,
     ## --- resample & move if degenerate ----------------------------
     acc_rate <- NA_real_
     if (ess < alpha * N_theta) {
+      ## adaptive proposal: weighted covariance of theta *before*
+      ## resampling (i.e. using the current normalised weights).
+      rprop <- if (adapt_theta_proposal) {
+        wm <- weighted_moments(lapply(states, function(st) st$theta), exp(log_w))
+        make_gaussian_rw_proposal(wm$cov, scale = proposal_scale)
+      } else NULL
+
       new_theta  <- vector("list", N_theta)
       new_states <- vector("list", N_theta)
       accepted   <- logical(N_theta)
@@ -148,13 +157,19 @@ re_abc_smc2 <- function(model,
         st_old <- states[[istar]]
         loglik_old <- st_old$log_lik           # log prod_t sum_n wtilde for i*
 
-        th_star <- model$rproposal(th_old)
+        if (is.null(rprop)) {
+          th_star <- model$rproposal(th_old)
+          log_q_ratio <- model$dproposal(th_old, th_star) -
+                         model$dproposal(th_star, th_old)
+        } else {
+          th_star <- rprop(th_old)
+          log_q_ratio <- 0                     # symmetric proposal
+        }
         st_star <- inner_run(th_star, realised_sched)  # fresh inner SMC up to eps_t
         loglik_star <- st_star$log_lik
 
         log_alpha <- (model$dprior(th_star) - model$dprior(th_old)) +
-                     (model$dproposal(th_old, th_star) -
-                      model$dproposal(th_star, th_old)) +
+                     log_q_ratio +
                      (loglik_star - loglik_old)
 
         if (log(runif(1)) < log_alpha) {
