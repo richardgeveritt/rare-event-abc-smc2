@@ -12,6 +12,23 @@ Model-agnostic R code for the three SMC algorithms in the paper:
 `example_model_gaussian.R` and `test_run.R` are a throw-away example +
 smoke test; replace the model with your own (see below).
 
+### Worked example models
+
+Three example models live alongside the algorithms, each a
+`make_*_model()` constructor returning the model `list` described below:
+
+| File | Constructor | Reparameterisation `u` |
+|------|-------------|------------------------|
+| [`example_model_gaussian.R`](example_model_gaussian.R) | `make_gaussian_model(y)` | half-normal latent normals |
+| [`ma.R`](ma.R) | `make_ma_model(y, q)` | the `n+q` i.i.d. MA innovations |
+| [`lv.R`](lv.R) | `make_lv_model(y, ...)` | all per-step CLE Brownian increments |
+
+In `ma.R` and `lv.R` the reference `φ(u\|θ) = N(0, I)` is independent of
+`θ`, so the move on `u` is a preconditioned Crank–Nicolson (pCN)
+proposal (`ru_move`/`du_move`). [`test_models.R`](test_models.R) smoke-tests
+both through all three algorithms (run from the project root); `lv.R`
+needs the `smfsb` package for the LV data and reaction network.
+
 ```r
 source("R/smc_utils.R"); source("R/rare_event_smc.R")
 source("R/abc_smc.R");   source("R/re_abc_smc2.R")
