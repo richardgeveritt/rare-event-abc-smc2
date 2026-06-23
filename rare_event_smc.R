@@ -54,13 +54,100 @@ source("R/smc_utils.R")
 }
 
 # ------------------------------------------------------------------
-# Move all u-particles, with an adaptive number of MCMC sweeps.
-# (lines: "move" of algorithm rare-event-smc, plus the adaptive-number
-#  scheme of Section "Adapting the number of MCMC moves").
+# One pCN-MALA (infinity-MALA / Crank-Nicolson Langevin) step for a
+# single u-particle, targeting P_eps(y|H(u,theta)) phi(u).  Requires the
+# model to supply grad_loglik_u = d/du log P_eps(y|H(u,theta)).  The
+# a^2 + b^2 = 1 construction makes the no-gradient limit exactly pCN; it
+# is most efficient when phi = N(0, I) (true for ma.R / lv.R), but the
+# full Metropolis-Hastings correction below is valid for any phi.
 # ------------------------------------------------------------------
-.re_move_all <- function(state, epsilon, model, adapt_nmoves, c_move, max_moves) {
+.re_pcn_mala_step_u <- function(u, x, log_kernel_cur, gll_cur,
+                                theta, epsilon, delta, model) {
+  a  <- (1 - delta / 4) / (1 + delta / 4)
+  b  <- sqrt(delta) / (1 + delta / 4)
+  cc <- (delta / 2) / (1 + delta / 4)
+
+  mu      <- a * u + cc * gll_cur
+  u_prop  <- mu + b * rnorm(length(u))
+  x_prop  <- model$H(u_prop, theta)
+  log_kernel_prop <- model$log_abc_kernel(x_prop, epsilon)
+  gll_prop <- model$grad_loglik_u(u_prop, theta, epsilon)
+  mu_rev  <- a * u_prop + cc * gll_prop
+
+  log_alpha <- (log_kernel_prop + model$dphi(u_prop, theta)) -
+               (log_kernel_cur  + model$dphi(u,      theta)) +
+               (-sum((u      - mu_rev)^2) / (2 * b^2)) -      # log q(u | u_prop)
+               (-sum((u_prop - mu    )^2) / (2 * b^2))        # log q(u_prop | u)
+
+  if (log(runif(1)) < log_alpha) {
+    list(u = u_prop, x = x_prop, log_kernel = log_kernel_prop,
+         gll = gll_prop, accepted = TRUE)
+  } else {
+    list(u = u, x = x, log_kernel = log_kernel_cur, gll = gll_cur, accepted = FALSE)
+  }
+}
+
+# ------------------------------------------------------------------
+# Move all u-particles.  'move' selects the kernel K_t:
+#   "mh"        generic Metropolis-Hastings via model$ru_move/du_move
+#               (e.g. the pCN move defined in ma.R / lv.R)
+#   "pcn-mala"  gradient-based pCN-MALA (model$grad_loglik_u required);
+#               the step size delta (state$move_step) is adapted towards
+#               an acceptance of 0.574 and persists across SMC steps
+#   "gaussian"  replace every particle with an independent EXACT draw
+#               from the Gaussian target (model$rtarget_gaussian
+#               required) -- a perfect move, no MCMC
+# For the MCMC moves the number of sweeps is chosen adaptively (Section
+# "Adapting the number of MCMC moves").
+# ------------------------------------------------------------------
+.re_move_all <- function(state, epsilon, model, move,
+                         adapt_nmoves, c_move, max_moves) {
   Nu <- length(state$u)
 
+  # ---- exact independent draw from the Gaussian target -------------
+  if (move == "gaussian") {
+    if (is.null(model$rtarget_gaussian))
+      stop("move = 'gaussian' requires the model to provide rtarget_gaussian().")
+    u <- model$rtarget_gaussian(state$theta, epsilon, Nu)
+    if (!is.list(u)) u <- split(u, seq_len(Nu))
+    state$u <- u
+    state$x <- lapply(u, function(uu) model$H(uu, state$theta))
+    state$log_kernel <- vapply(state$x,
+      function(xx) model$log_abc_kernel(xx, epsilon), numeric(1))
+    state$last_acc_rate <- 1
+    return(state)
+  }
+
+  # ---- pCN-MALA ----------------------------------------------------
+  if (move == "pcn-mala") {
+    if (is.null(model$grad_loglik_u))
+      stop("move = 'pcn-mala' requires the model to provide grad_loglik_u().")
+    gll <- lapply(state$u,
+      function(uu) model$grad_loglik_u(uu, state$theta, epsilon))
+    one_sweep <- function(delta) {
+      accept <- 0L
+      for (n in seq_len(Nu)) {
+        res <- .re_pcn_mala_step_u(state$u[[n]], state$x[[n]], state$log_kernel[n],
+                                   gll[[n]], state$theta, epsilon, delta, model)
+        state$u[[n]]        <<- res$u
+        state$x[[n]]        <<- res$x
+        state$log_kernel[n] <<- res$log_kernel
+        gll[[n]]            <<- res$gll
+        accept <- accept + res$accepted
+      }
+      accept / Nu
+    }
+    delta <- state$move_step
+    p_acc <- one_sweep(delta)
+    delta <- min(max(delta * exp(0.5 * (p_acc - 0.574)), 1e-6), 3.99)  # adapt
+    state$move_step <- delta
+    n_sweeps <- if (adapt_nmoves) adaptive_num_mcmc(p_acc, c_move, max_moves) else 1L
+    if (n_sweeps > 1L) for (s in seq_len(n_sweeps - 1L)) one_sweep(delta)
+    state$last_acc_rate <- p_acc
+    return(state)
+  }
+
+  # ---- default: generic Metropolis-Hastings move -------------------
   one_sweep <- function() {
     accept <- 0L
     for (n in seq_len(Nu)) {
@@ -86,7 +173,7 @@ source("R/smc_utils.R")
 # Initialise the inner SMC (line 1 of algorithm rare-event-smc):
 # simulate u_0 ~ phi(. | theta), uniform weights, no step taken yet.
 # ------------------------------------------------------------------
-re_smc_init <- function(model, theta, Nu) {
+re_smc_init <- function(model, theta, Nu, move_step0 = 1) {
   u <- model$rphi(theta, Nu)
   if (!is.list(u)) u <- split(u, seq_len(Nu))   # accept matrix/vector returns
   x <- lapply(u, function(uu) model$H(uu, theta))
@@ -100,6 +187,7 @@ re_smc_init <- function(model, theta, Nu) {
     last_epsilon = NA_real_,
     t            = 0L,                  # number of tolerance steps taken
     log_lik      = 0,                   # running log of prod_t sum_n wtilde
+    move_step    = move_step0,          # pCN-MALA step size (adapted, persists)
     last_acc_rate = NA_real_
   )
 }
@@ -131,6 +219,7 @@ re_smc_log_incremental <- function(state, epsilon, model) {
 re_smc_step <- function(state, epsilon, model,
                         alpha         = 0.5,   # resample if ESS < alpha * Nu
                         resample_scheme = "multinomial",
+                        move          = "mh",  # "mh" | "pcn-mala" | "gaussian"
                         adapt_nmoves  = TRUE,
                         c_move        = 0.2,
                         max_moves     = 100L) {
@@ -164,7 +253,8 @@ re_smc_step <- function(state, epsilon, model,
 
   ## --- move (line 16) ----------------------------------------------
   state$last_epsilon <- epsilon
-  state <- .re_move_all(state, epsilon, model, adapt_nmoves, c_move, max_moves)
+  state <- .re_move_all(state, epsilon, model, move,
+                        adapt_nmoves, c_move, max_moves)
 
   state$t <- state$t + 1L
   state
@@ -180,15 +270,17 @@ re_smc_step <- function(state, epsilon, model,
 re_smc_run <- function(model, theta, Nu, epsilon_schedule,
                        alpha           = 0.5,
                        resample_scheme = "multinomial",
+                       move            = "mh",
+                       move_step0      = 1,
                        adapt_nmoves    = TRUE,
                        c_move          = 0.2,
                        max_moves       = 100L) {
-  state <- re_smc_init(model, theta, Nu)
+  state <- re_smc_init(model, theta, Nu, move_step0 = move_step0)
   for (eps in epsilon_schedule) {
     state <- re_smc_step(state, eps, model,
                          alpha = alpha, resample_scheme = resample_scheme,
-                         adapt_nmoves = adapt_nmoves, c_move = c_move,
-                         max_moves = max_moves)
+                         move = move, adapt_nmoves = adapt_nmoves,
+                         c_move = c_move, max_moves = max_moves)
   }
   state
 }

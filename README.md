@@ -65,15 +65,22 @@ proposal (see below) supplies its own symmetric Gaussian random walk.
 | `dphi(u, θ)`            | (u,θ) → scalar | `log φ(u\|θ)` |
 | `H(u, θ)`               | (u,θ) → x      | deterministic transform |
 | `log_abc_kernel(x, ε)`  | (x,ε) → scalar | `log P_ε(y\|x)` |
-| `ru_move(u, θ)`         | (u,θ) → u*     | MCMC proposal on `u` (kernel `K_t`) |
+| `ru_move(u, θ)`         | (u,θ) → u*     | MCMC proposal on `u` (kernel `K_t`) — needed for `move="mh"` |
 | `du_move(to, from, θ)`  | (u,u,θ) → scalar | `log` proposal density; return `0` if symmetric |
+| `grad_loglik_u(u, θ, ε)` | (u,θ,ε) → vector | `∇_u log P_ε(y\|H(u,θ))` — needed for `move="pcn-mala"` |
+| `rtarget_gaussian(θ, ε, n)` | (θ,ε,n) → list | `n` exact iid draws from `π(u)` — needed for `move="gaussian"` |
 
-The MCMC move on `u` is a Metropolis–Hastings step with invariant
-distribution `P_ε(y\|H(u,θ)) φ(u\|θ)`, built from `ru_move`/`du_move`.
-(Prangle 2016 uses a slice sampler; any invariant kernel is fine — just
-encode it in `ru_move`/`du_move`.) For the "split randomness" variant of
-Section "Splitting different sources of randomness", let `ru_move` move
-only the part `u_s` and leave `u_r` fixed.
+The `u`-move (kernel `K_t`, invariant `P_ε(y\|H(u,θ)) φ(u\|θ)`) is selected
+by the `move` argument (see "Choosing the u-move" below). The default
+`"mh"` is a Metropolis–Hastings step built from `ru_move`/`du_move`
+(Prangle 2016 uses a slice sampler; any invariant kernel is fine). For the
+"split randomness" variant of Section "Splitting different sources of
+randomness", let `ru_move` move only the part `u_s` and leave `u_r` fixed.
+
+`grad_loglik_u`/`rtarget_gaussian` are only required for the corresponding
+non-default moves. `ma.R` provides both (its `H` is linear, so the
+`u`-target is exactly Gaussian); `lv.R` provides neither, so LV uses
+`move="mh"`.
 
 ## Running
 
@@ -94,6 +101,29 @@ Common arguments: `alpha` (resample when `ESS < alpha·N`), `beta` (target
 CESS fraction), `adapt_nmoves`/`c_move`/`max_moves` (adaptive number of
 MCMC sweeps, South et al. 2019, `c = 0.2`), `resample_scheme`
 (`"multinomial"` as in the paper, or `"systematic"`).
+
+### Choosing the u-move (rare event SMC / RE-ABC-SMC²)
+
+`re_abc_smc2` (and `re_smc_run`/`re_smc_step`) take a `move` argument
+selecting the inner move on `u`:
+
+| `move` | description | model needs |
+|--------|-------------|-------------|
+| `"mh"` (default) | generic Metropolis–Hastings (e.g. the pCN move in `ma.R`/`lv.R`) | `ru_move`, `du_move` |
+| `"pcn-mala"` | gradient-based pCN-MALA (∞-MALA); step size adapted to ≈0.574 acceptance and carried across SMC steps (`move_step0` sets the start) | `grad_loglik_u` |
+| `"gaussian"` | replace every `u`-particle with an **exact independent draw** from the Gaussian `u`-target — no MCMC (only valid when `H` is linear and the kernel Gaussian) | `rtarget_gaussian` |
+
+```r
+fit <- re_abc_smc2(model_ma, N_theta = 200, Nu = 60,
+                   epsilon_schedule = c(20, 11, 6, 3, 1), move = "pcn-mala")
+```
+
+On the MA model the gradient/exact moves markedly reduce the variance of
+the inner likelihood estimate (and hence sharpen the outer posterior)
+relative to `"mh"`. The standalone comparison of RWM / pCN / MALA /
+pCN-MALA / HMC for this `u`-target is in
+[`mcmc_u_comparison.R`](mcmc_u_comparison.R) (writes
+`mcmc_u_comparison.pdf`).
 
 ### Adaptive theta proposal
 

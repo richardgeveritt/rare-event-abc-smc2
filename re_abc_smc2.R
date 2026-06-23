@@ -60,6 +60,8 @@ re_abc_smc2 <- function(model,
                         inner_alpha      = 0.5,  # inner resample threshold
                         max_steps        = 200L, # safety cap (adaptive mode)
                         resample_scheme  = "multinomial",
+                        move             = "mh",  # inner u-move: "mh" | "pcn-mala" | "gaussian"
+                        move_step0       = 1,     # initial pCN-MALA step size
                         adapt_nmoves     = TRUE,
                         c_move           = 0.2,
                         max_moves        = 100L,
@@ -77,18 +79,21 @@ re_abc_smc2 <- function(model,
   inner_step <- function(state, eps) {
     re_smc_step(state, eps, model,
                 alpha = inner_alpha, resample_scheme = resample_scheme,
-                adapt_nmoves = adapt_nmoves, c_move = c_move, max_moves = max_moves)
+                move = move, adapt_nmoves = adapt_nmoves, c_move = c_move,
+                max_moves = max_moves)
   }
   inner_run <- function(theta, schedule) {
     re_smc_run(model, theta, Nu, schedule,
                alpha = inner_alpha, resample_scheme = resample_scheme,
-               adapt_nmoves = adapt_nmoves, c_move = c_move, max_moves = max_moves)
+               move = move, move_step0 = move_step0, adapt_nmoves = adapt_nmoves,
+               c_move = c_move, max_moves = max_moves)
   }
 
   ## --- initialise (lines 1-3): theta_0 ~ p, u_0 ~ phi -------------
   theta <- model$rprior(N_theta)
   if (!is.list(theta)) theta <- split(theta, seq_len(N_theta))
-  states <- lapply(theta, function(th) re_smc_init(model, th, Nu))  # inner SMCs
+  states <- lapply(theta,                                           # inner SMCs
+                   function(th) re_smc_init(model, th, Nu, move_step0 = move_step0))
   log_w  <- rep(-log(N_theta), N_theta)
 
   eps_prev      <- NA_real_

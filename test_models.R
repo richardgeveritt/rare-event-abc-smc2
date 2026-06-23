@@ -76,19 +76,33 @@ for (th in list(theta_true, c(0.2, 0.0), c(-0.4, 0.3))) {
 }
 cat("\n")
 
-## ---- ABC-SMC and RE-ABC-SMC^2 (same final tolerance) --------------
+## ---- ABC-SMC ------------------------------------------------------
 fit_ma_abc <- abc_smc(model_ma, N_theta = 150, Nx = 20,
                       epsilon_final = 1, beta = 0.9)
-fit_ma_re2 <- re_abc_smc2(model_ma, N_theta = 150, Nu = 20,
-                          epsilon_final = 1, beta = 0.9)
-cat(sprintf("ABC-SMC      posterior mean: (% .3f, % .3f)   logZ=%.2f  iters=%d\n",
+cat(sprintf("ABC-SMC                 posterior mean: (% .3f, % .3f)   logZ=%.2f  iters=%d\n",
             wmean(fit_ma_abc)[1], wmean(fit_ma_abc)[2],
             fit_ma_abc$log_evidence, fit_ma_abc$n_iterations))
-cat(sprintf("RE-ABC-SMC^2 posterior mean: (% .3f, % .3f)   logZ=%.2f  iters=%d\n",
-            wmean(fit_ma_re2)[1], wmean(fit_ma_re2)[2],
-            fit_ma_re2$log_evidence, fit_ma_re2$n_iterations))
-cat(sprintf("(true theta = (% .3f, % .3f); both should move off the prior mean (0,0))\n\n",
+
+## ---- RE-ABC-SMC^2: compare the three inner u-moves ----------------
+## The inner u-move matters.  We compare the generic MH (pCN) move with
+## the gradient-based pCN-MALA and the exact Gaussian draw; the latter
+## two are available because MA's H is linear, so the u-target is exactly
+## Gaussian (grad_loglik_u / rtarget_gaussian are provided by ma.R).
+## A FIXED shared schedule is used so the log-evidence estimates are
+## directly comparable: a less-negative logZ means a lower-variance inner
+## likelihood estimate (less downward SMC bias) -- the robust signal here.
+## (Single-run posterior means are noisy at this Nu and only indicative.)
+cat("RE-ABC-SMC^2 inner-move comparison (fixed schedule",
+    paste(sched_ma, collapse = ","), "):\n")
+for (mv in c("mh", "pcn-mala", "gaussian")) {
+  fit <- re_abc_smc2(model_ma, N_theta = 150, Nu = 20,
+                     epsilon_schedule = sched_ma, move = mv)
+  cat(sprintf("  [%-8s]  posterior mean: (% .3f, % .3f)   logZ=%.2f\n",
+              mv, wmean(fit)[1], wmean(fit)[2], fit$log_evidence))
+}
+cat(sprintf("(true theta = (% .3f, % .3f); expect logZ: mh < pcn-mala <= gaussian,\n",
             theta_true[1], theta_true[2]))
+cat(" the better u-moves giving a lower-variance inner likelihood.)\n\n")
 
 # =====================================================================
 # Lotka-Volterra model  (coarse Euler step for a fast smoke test)

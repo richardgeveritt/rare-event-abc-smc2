@@ -71,6 +71,22 @@ ma_transform <- function(u, theta) {
   as.numeric(yf[(q + 1):length(u)])
 }
 
+# ---------------------------------------------------------------------
+# Adjoint of the linear map  u -> x = A u  ( = ma_transform ): given a
+# length-n residual r, returns A' r (length n+q), matrix-free.  Used for
+# the likelihood gradient.
+# ---------------------------------------------------------------------
+ma_transform_adjoint <- function(r, theta) {
+  q <- length(theta); f <- c(1, theta); n <- length(r); d <- n + q
+  out <- numeric(d)
+  for (m in seq_len(q + 1)) {                  # (A'r)[j] = sum_m f[m] r[j-q+m-1]
+    idx <- seq_len(d) - q + m - 1
+    ok  <- idx >= 1 & idx <= n
+    out[ok] <- out[ok] + f[m] * r[idx[ok]]
+  }
+  out
+}
+
 # =====================================================================
 # Model constructor.
 #
@@ -116,6 +132,25 @@ make_ma_model <- function(y, q, pcn_rho = 0.1, rw_sd_theta = 0.1) {
       sum(dnorm(to, mean = s_rho * from, sd = pcn_rho, log = TRUE)),
 
     # ---- ABC kernel: Gaussian on the raw-series Euclidean distance ---
-    log_abc_kernel = function(x, epsilon) -0.5 * (distance(x) / epsilon)^2
+    log_abc_kernel = function(x, epsilon) -0.5 * (distance(x) / epsilon)^2,
+
+    # ---- gradient of log P_eps(y | H(u,theta)) w.r.t. u (for pCN-MALA) -
+    #   = -(1/eps^2) A'(A u - y)
+    grad_loglik_u = function(u, theta, epsilon)
+      -ma_transform_adjoint(ma_transform(u, theta) - y, theta) / epsilon^2,
+
+    # ---- exact independent draws from the Gaussian u-target -----------
+    #   pi(u) ∝ P_eps(y|H(u,theta)) phi(u) = N(m, C),
+    #   C = (I + A'A/eps^2)^{-1},  m = C A'y / eps^2  (H linear, Gaussian kernel)
+    rtarget_gaussian = function(theta, epsilon, n_draws) {
+      d   <- n + length(theta)
+      A   <- vapply(seq_len(d), function(j) {
+        e <- numeric(d); e[j] <- 1; ma_transform(e, theta)
+      }, numeric(n))
+      P   <- diag(d) + crossprod(A) / epsilon^2          # precision
+      m   <- as.vector(solve(P, crossprod(A, y) / epsilon^2))
+      R   <- chol(P)                                     # P = R'R
+      lapply(seq_len(n_draws), function(i) m + backsolve(R, rnorm(d)))
+    }
   )
 }
