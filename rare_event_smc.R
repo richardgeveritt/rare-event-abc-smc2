@@ -88,6 +88,18 @@ source("R/smc_utils.R")
 }
 
 # ------------------------------------------------------------------
+# Resolve the requested move against the model's capabilities, falling
+# back (silently) to the generic MH move when the gradient / exact
+# sampler it needs is absent.  This lets "pcn-mala" be the default while
+# gradient-free models (e.g. lv.R, example_model_gaussian.R) still run.
+# ------------------------------------------------------------------
+.resolve_move <- function(move, model) {
+  if (move == "pcn-mala" && is.null(model$grad_loglik_u))    return("mh")
+  if (move == "gaussian" && is.null(model$rtarget_gaussian)) return("mh")
+  move
+}
+
+# ------------------------------------------------------------------
 # Move all u-particles.  'move' selects the kernel K_t:
 #   "mh"        generic Metropolis-Hastings via model$ru_move/du_move
 #               (e.g. the pCN move defined in ma.R / lv.R)
@@ -219,7 +231,7 @@ re_smc_log_incremental <- function(state, epsilon, model) {
 re_smc_step <- function(state, epsilon, model,
                         alpha         = 0.5,   # resample if ESS < alpha * Nu
                         resample_scheme = "multinomial",
-                        move          = "mh",  # "mh" | "pcn-mala" | "gaussian"
+                        move          = "pcn-mala",  # "pcn-mala" | "mh" | "gaussian"
                         adapt_nmoves  = TRUE,
                         c_move        = 0.2,
                         max_moves     = 100L) {
@@ -270,11 +282,12 @@ re_smc_step <- function(state, epsilon, model,
 re_smc_run <- function(model, theta, Nu, epsilon_schedule,
                        alpha           = 0.5,
                        resample_scheme = "multinomial",
-                       move            = "mh",
+                       move            = "pcn-mala",
                        move_step0      = 1,
                        adapt_nmoves    = TRUE,
                        c_move          = 0.2,
                        max_moves       = 100L) {
+  move  <- .resolve_move(move, model)
   state <- re_smc_init(model, theta, Nu, move_step0 = move_step0)
   for (eps in epsilon_schedule) {
     state <- re_smc_step(state, eps, model,

@@ -442,6 +442,25 @@ move on <code>u</code> is a preconditioned Crank–Nicolson (pCN) proposal
 through all three algorithms (run from the project root);
 <code>lv.R</code> needs the <code>smfsb</code> package for the LV data
 and reaction network.</p>
+<p>For the MA model, <a href="ma_exact_posterior.R"><code>ma_exact_posterior.R</code></a>
+provides the <strong>exact (non-ABC) posterior</strong> — the stationary
+MA(q) Gaussian likelihood <code>y ~ N(0, Σ(θ))</code> with the
+invertibility prior — via <code>ma_loglik_exact()</code>, an adaptive
+random-walk MH sampler <code>ma_exact_mcmc()</code>, and a 2-D grid
+evaluator. This is the ground truth the ABC posteriors converge to as
+<code>ε → 0</code>. <a href="visualise_theta_evolution.R"><code>visualise_theta_evolution.R</code></a>
+shows the ABC-SMC / RE-ABC-SMC² posteriors evolving over the tolerance
+schedule against this exact reference (using the <code>ggsmc</code>
+package), and <a href="converge_to_exact.R"><code>converge_to_exact.R</code></a> runs
+both algorithms adaptively to <code>ε = 0.1</code>: RE-ABC-SMC² with
+<code>move = &quot;gaussian&quot;</code> matches the exact posterior (mean, sd and
+correlation), while plain ABC-SMC collapses to a point at that tolerance
+on the raw 30-dim data. <a href="evidence_model_selection.R"><code>evidence_model_selection.R</code></a>
+fits MA(2)/MA(3)/MA(4) to data from each, reporting a 3×3
+<code>log_evidence</code> table per algorithm (adaptive to
+<code>ε = 1</code>): both agree on the selected model, but RE-ABC-SMC²’s
+evidence is less downward-biased and far more stable than ABC-SMC’s in
+the hard cases.</p>
 <pre class="r"><code>source(&quot;R/smc_utils.R&quot;); source(&quot;R/rare_event_smc.R&quot;)
 source(&quot;R/abc_smc.R&quot;);   source(&quot;R/re_abc_smc2.R&quot;)</code></pre>
 </div>
@@ -552,7 +571,8 @@ Gaussian random walk.</p>
 <tr class="even">
 <td><code>ru_move(u, θ)</code></td>
 <td>(u,θ) → u*</td>
-<td>MCMC proposal on <code>u</code> (kernel <code>K_t</code>)</td>
+<td>MCMC proposal on <code>u</code> (kernel <code>K_t</code>) — needed
+for <code>move=&quot;mh&quot;</code></td>
 </tr>
 <tr class="odd">
 <td><code>du_move(to, from, θ)</code></td>
@@ -560,16 +580,34 @@ Gaussian random walk.</p>
 <td><code>log</code> proposal density; return <code>0</code> if
 symmetric</td>
 </tr>
+<tr class="even">
+<td><code>grad_loglik_u(u, θ, ε)</code></td>
+<td>(u,θ,ε) → vector</td>
+<td><code>∇_u log P_ε(y\|H(u,θ))</code> — needed for
+<code>move=&quot;pcn-mala&quot;</code></td>
+</tr>
+<tr class="odd">
+<td><code>rtarget_gaussian(θ, ε, n)</code></td>
+<td>(θ,ε,n) → list</td>
+<td><code>n</code> exact iid draws from <code>π(u)</code> — needed for
+<code>move=&quot;gaussian&quot;</code></td>
+</tr>
 </tbody>
 </table>
-<p>The MCMC move on <code>u</code> is a Metropolis–Hastings step with
-invariant distribution <code>P_ε(y\|H(u,θ)) φ(u\|θ)</code>, built from
-<code>ru_move</code>/<code>du_move</code>. (Prangle 2016 uses a slice
-sampler; any invariant kernel is fine — just encode it in
-<code>ru_move</code>/<code>du_move</code>.) For the “split randomness”
+<p>The <code>u</code>-move (kernel <code>K_t</code>, invariant
+<code>P_ε(y\|H(u,θ)) φ(u\|θ)</code>) is selected by the
+<code>move</code> argument (see “Choosing the u-move” below). The
+default <code>&quot;mh&quot;</code> is a Metropolis–Hastings step built from
+<code>ru_move</code>/<code>du_move</code> (Prangle 2016 uses a slice
+sampler; any invariant kernel is fine). For the “split randomness”
 variant of Section “Splitting different sources of randomness”, let
 <code>ru_move</code> move only the part <code>u_s</code> and leave
 <code>u_r</code> fixed.</p>
+<p><code>grad_loglik_u</code>/<code>rtarget_gaussian</code> are only
+required for the corresponding non-default moves. <code>ma.R</code>
+provides both (its <code>H</code> is linear, so the
+<code>u</code>-target is exactly Gaussian); <code>lv.R</code> provides
+neither, so LV uses <code>move=&quot;mh&quot;</code>.</p>
 </div>
 </div>
 <div id="running" class="section level2">
@@ -592,6 +630,63 @@ fraction),
 <code>c = 0.2</code>), <code>resample_scheme</code>
 (<code>&quot;multinomial&quot;</code> as in the paper, or
 <code>&quot;systematic&quot;</code>).</p>
+<div id="choosing-the-u-move-rare-event-smc-re-abc-smc²" class="section level3">
+<h3>Choosing the u-move (rare event SMC / RE-ABC-SMC²)</h3>
+<p><code>re_abc_smc2</code> (and
+<code>re_smc_run</code>/<code>re_smc_step</code>) take a
+<code>move</code> argument selecting the inner move on
+<code>u</code>:</p>
+<table>
+<colgroup>
+<col width="23%" />
+<col width="38%" />
+<col width="38%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th><code>move</code></th>
+<th>description</th>
+<th>model needs</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>&quot;pcn-mala&quot;</code> (default)</td>
+<td>gradient-based pCN-MALA (∞-MALA); step size adapted to ≈0.574
+acceptance and carried across SMC steps (<code>move_step0</code> sets
+the start)</td>
+<td><code>grad_loglik_u</code></td>
+</tr>
+<tr class="even">
+<td><code>&quot;mh&quot;</code></td>
+<td>generic Metropolis–Hastings (e.g. the pCN move in
+<code>ma.R</code>/<code>lv.R</code>)</td>
+<td><code>ru_move</code>, <code>du_move</code></td>
+</tr>
+<tr class="odd">
+<td><code>&quot;gaussian&quot;</code></td>
+<td>replace every <code>u</code>-particle with an <strong>exact
+independent draw</strong> from the Gaussian <code>u</code>-target — no
+MCMC (only valid when <code>H</code> is linear and the kernel
+Gaussian)</td>
+<td><code>rtarget_gaussian</code></td>
+</tr>
+</tbody>
+</table>
+<p>The default is <code>&quot;pcn-mala&quot;</code>; if the model does not supply
+the piece a move needs (<code>grad_loglik_u</code> for pcn-mala,
+<code>rtarget_gaussian</code> for gaussian) it <strong>falls back
+silently to <code>&quot;mh&quot;</code></strong>, so gradient-free models
+(<code>lv.R</code>, <code>example_model_gaussian.R</code>) still run
+with the default.</p>
+<pre class="r"><code>fit &lt;- re_abc_smc2(model_ma, N_theta = 200, Nu = 60,
+                   epsilon_schedule = c(20, 11, 6, 3, 1))   # pcn-mala by default</code></pre>
+<p>On the MA model the gradient/exact moves markedly reduce the variance
+of the inner likelihood estimate (and hence sharpen the outer posterior)
+relative to <code>&quot;mh&quot;</code>. The standalone comparison of RWM / pCN /
+MALA / pCN-MALA / HMC for this <code>u</code>-target is in <a href="mcmc_u_comparison.R"><code>mcmc_u_comparison.R</code></a> (writes
+<code>mcmc_u_comparison.pdf</code>).</p>
+</div>
 <div id="adaptive-theta-proposal" class="section level3">
 <h3>Adaptive theta proposal</h3>
 <p>By default (<code>adapt_theta_proposal = TRUE</code>) the
@@ -604,9 +699,13 @@ cross-component correlations are respected via a Cholesky factor). The
 scale is held fixed for the whole move step, so the proposal is
 symmetric and <code>model$rproposal</code> /
 <code>model$dproposal</code> are <strong>not used</strong> in this mode.
-<code>proposal_scale</code> multiplies the proposal standard deviations
-(default <code>1</code>, i.e. exactly the weighted sample covariance;
-<code>proposal_scale^2</code> multiplies the covariance).</p>
+The covariance is scaled by the Roberts–Gelman–Gilks optimal factor: the
+proposal standard deviations are <code>2.38/sqrt(d)</code> times the
+weighted sample sd (<code>d</code> = dim of <code>theta</code>), i.e.
+the proposal covariance is <code>(2.38^2/d)·Σ̂</code>. This is the
+default (<code>proposal_scale = NULL</code>); pass a numeric
+<code>proposal_scale</code> to use that fixed value as the scale on the
+sd instead.</p>
 <p>Set <code>adapt_theta_proposal = FALSE</code> to fall back to the
 model-supplied <code>rproposal</code>/<code>dproposal</code>
 instead.</p>

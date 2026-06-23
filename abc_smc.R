@@ -92,7 +92,8 @@ abc_smc <- function(model,
                     c_move           = 0.2,
                     max_moves        = 100L,
                     adapt_theta_proposal = TRUE,  # adaptive Gaussian RW on theta
-                    proposal_scale       = 1,     # multiplies the weighted sd
+                    proposal_scale       = NULL,  # NULL => 2.38/sqrt(d) (optimal); else a fixed scale
+                    record_history   = FALSE,     # keep the weighted theta-population each iteration
                     verbose          = FALSE) {
 
   adaptive <- is.null(epsilon_schedule)
@@ -115,6 +116,7 @@ abc_smc <- function(model,
   eps_history   <- numeric(0)
   ess_history   <- numeric(0)
   accrate_hist  <- numeric(0)
+  history       <- list()
 
   T_total <- if (adaptive) max_steps else length(epsilon_schedule)
 
@@ -157,14 +159,24 @@ abc_smc <- function(model,
     eps_history <- c(eps_history, eps_t)
     ess_history <- c(ess_history, ess)
 
+    ## record the weighted theta-population representing target t
+    if (record_history) {
+      history[[t]] <- list(
+        theta   = do.call(rbind, lapply(theta, as.numeric)),
+        log_w   = log_w,
+        epsilon = eps_t)
+    }
+
     ## --- resample & move if degenerate (lines 9-12) ---------------
     acc_rate <- NA_real_
     if (ess < alpha * N_theta) {
       ## adaptive proposal: weighted covariance of theta *before*
-      ## resampling (i.e. using the current normalised weights).
+      ## resampling (i.e. using the current normalised weights), scaled by
+      ## the Roberts-Gelman-Gilks optimal factor 2.38/sqrt(d) by default.
       rprop <- if (adapt_theta_proposal) {
         wm <- weighted_moments(theta, exp(log_w))
-        make_gaussian_rw_proposal(wm$cov, scale = proposal_scale)
+        scl <- if (is.null(proposal_scale)) 2.38 / sqrt(nrow(wm$cov)) else proposal_scale
+        make_gaussian_rw_proposal(wm$cov, scale = scl)
       } else NULL
 
       anc      <- resample(log_w, resample_scheme)
@@ -212,7 +224,8 @@ abc_smc <- function(model,
     epsilon      = eps_history,
     ess          = ess_history,
     acc_rate     = accrate_hist,
-    n_iterations = length(eps_history)
+    n_iterations = length(eps_history),
+    history      = if (record_history) history else NULL
   )
 }
 

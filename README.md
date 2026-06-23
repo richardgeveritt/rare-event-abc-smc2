@@ -29,6 +29,24 @@ proposal (`ru_move`/`du_move`). [`test_models.R`](test_models.R) smoke-tests
 both through all three algorithms (run from the project root); `lv.R`
 needs the `smfsb` package for the LV data and reaction network.
 
+For the MA model, [`ma_exact_posterior.R`](ma_exact_posterior.R) provides
+the **exact (non-ABC) posterior** — the stationary MA(q) Gaussian
+likelihood `y ~ N(0, Σ(θ))` with the invertibility prior — via
+`ma_loglik_exact()`, an adaptive random-walk MH sampler `ma_exact_mcmc()`,
+and a 2-D grid evaluator. This is the ground truth the ABC posteriors
+converge to as `ε → 0`. [`visualise_theta_evolution.R`](visualise_theta_evolution.R)
+shows the ABC-SMC / RE-ABC-SMC² posteriors evolving over the tolerance
+schedule against this exact reference (using the `ggsmc` package), and
+[`converge_to_exact.R`](converge_to_exact.R) runs both algorithms
+adaptively to `ε = 0.1`: RE-ABC-SMC² with `move = "gaussian"` matches the
+exact posterior (mean, sd and correlation), while plain ABC-SMC collapses
+to a point at that tolerance on the raw 30-dim data.
+[`evidence_model_selection.R`](evidence_model_selection.R) fits MA(2)/MA(3)/MA(4)
+to data from each, reporting a 3×3 `log_evidence` table per algorithm
+(adaptive to `ε = 1`): both agree on the selected model, but RE-ABC-SMC²'s
+evidence is less downward-biased and far more stable than ABC-SMC's in the
+hard cases.
+
 ```r
 source("R/smc_utils.R"); source("R/rare_event_smc.R")
 source("R/abc_smc.R");   source("R/re_abc_smc2.R")
@@ -109,13 +127,18 @@ selecting the inner move on `u`:
 
 | `move` | description | model needs |
 |--------|-------------|-------------|
-| `"mh"` (default) | generic Metropolis–Hastings (e.g. the pCN move in `ma.R`/`lv.R`) | `ru_move`, `du_move` |
-| `"pcn-mala"` | gradient-based pCN-MALA (∞-MALA); step size adapted to ≈0.574 acceptance and carried across SMC steps (`move_step0` sets the start) | `grad_loglik_u` |
+| `"pcn-mala"` (default) | gradient-based pCN-MALA (∞-MALA); step size adapted to ≈0.574 acceptance and carried across SMC steps (`move_step0` sets the start) | `grad_loglik_u` |
+| `"mh"` | generic Metropolis–Hastings (e.g. the pCN move in `ma.R`/`lv.R`) | `ru_move`, `du_move` |
 | `"gaussian"` | replace every `u`-particle with an **exact independent draw** from the Gaussian `u`-target — no MCMC (only valid when `H` is linear and the kernel Gaussian) | `rtarget_gaussian` |
+
+The default is `"pcn-mala"`; if the model does not supply the piece a move
+needs (`grad_loglik_u` for pcn-mala, `rtarget_gaussian` for gaussian) it
+**falls back silently to `"mh"`**, so gradient-free models (`lv.R`,
+`example_model_gaussian.R`) still run with the default.
 
 ```r
 fit <- re_abc_smc2(model_ma, N_theta = 200, Nu = 60,
-                   epsilon_schedule = c(20, 11, 6, 3, 1), move = "pcn-mala")
+                   epsilon_schedule = c(20, 11, 6, 3, 1))   # pcn-mala by default
 ```
 
 On the MA model the gradient/exact moves markedly reduce the variance of
@@ -134,9 +157,12 @@ before the resampling step** (the unbiased weighted-sample estimator, as in
 `stats::cov.wt`; full covariance matrix, so cross-component correlations are
 respected via a Cholesky factor). The scale is held fixed for the whole
 move step, so the proposal is symmetric and `model$rproposal` /
-`model$dproposal` are **not used** in this mode. `proposal_scale` multiplies
-the proposal standard deviations (default `1`, i.e. exactly the weighted
-sample covariance; `proposal_scale^2` multiplies the covariance).
+`model$dproposal` are **not used** in this mode. The covariance is scaled by
+the Roberts–Gelman–Gilks optimal factor: the proposal standard deviations
+are `2.38/sqrt(d)` times the weighted sample sd (`d` = dim of `theta`), i.e.
+the proposal covariance is `(2.38^2/d)·Σ̂`. This is the default
+(`proposal_scale = NULL`); pass a numeric `proposal_scale` to use that fixed
+value as the scale on the sd instead.
 
 Set `adapt_theta_proposal = FALSE` to fall back to the model-supplied
 `rproposal`/`dproposal` instead.
