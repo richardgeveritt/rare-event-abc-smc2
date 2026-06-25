@@ -1,0 +1,26 @@
+270 jobs total | 180 done | 90 pending
+Running 90 pending fits on 7 cores ...
+
+270/270 fits succeeded (raw rows in R/evidence_results_raw.csv).
+
+== ABC-SMC : mean log-evidence (sd over reps), n=100 ==
+data\fit MA(2)       MA(3)       MA(4)       
+MA(2)      -92.7(3.6)  -94.8(4.5)  -92.5(5.3)
+MA(3)      -77.5(2.0)  -80.3(2.4)  -83.8(2.3)
+MA(4)     -283.1(12.6) -274.3(6.8) -264.6(5.1)
+
+== RE-gaussian : mean log-evidence (sd over reps), n=100 ==
+data\fit MA(2)       MA(3)       MA(4)       
+MA(2)      -70.7(0.2)  -71.7(0.2)  -72.1(0.3)
+MA(3)      -67.3(0.1)  -66.5(0.1)  -67.6(0.2)
+MA(4)     -106.2(0.2)  -97.9(0.6)  -97.6(1.0)
+
+== RE-pcnmala : mean log-evidence (sd over reps), n=100 ==
+data\fit MA(2)       MA(3)       MA(4)       
+MA(2)      -71.5(0.2)  -72.5(0.3)  -72.9(0.4)
+MA(3)      -68.4(0.2)  -67.7(0.2)  -68.5(0.1)
+MA(4)     -107.7(0.8)  -99.9(0.4) -100.0(0.9)
+
+Wrote R/evidence_sweep.pdf, R/evidence_summary.csv, R/evidence_results_raw.csv
+Warning message:
+package ‘ggplot2’ was built under R version 4.5.2 

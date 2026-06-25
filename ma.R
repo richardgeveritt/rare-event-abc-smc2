@@ -104,6 +104,13 @@ make_ma_model <- function(y, q, pcn_rho = 0.1, rw_sd_theta = 0.1) {
   distance <- function(x) sqrt(sum((x - y)^2))
   s_rho    <- sqrt(1 - pcn_rho^2)               # pCN retention factor
 
+  # cache of A'A and A'y for the most recent theta (A = Jacobian of H,
+  # which depends on theta only, not epsilon); speeds up rtarget_gaussian
+  # a lot when called repeatedly for the same theta (e.g. the inner-SMC
+  # reruns inside the RE-ABC-SMC^2 external move).
+  gcache <- new.env(parent = emptyenv())
+  gcache$theta <- NULL
+
   list(
     y = y,
 
@@ -143,13 +150,19 @@ make_ma_model <- function(y, q, pcn_rho = 0.1, rw_sd_theta = 0.1) {
     #   pi(u) ∝ P_eps(y|H(u,theta)) phi(u) = N(m, C),
     #   C = (I + A'A/eps^2)^{-1},  m = C A'y / eps^2  (H linear, Gaussian kernel)
     rtarget_gaussian = function(theta, epsilon, n_draws) {
-      d   <- n + length(theta)
-      A   <- vapply(seq_len(d), function(j) {
-        e <- numeric(d); e[j] <- 1; ma_transform(e, theta)
-      }, numeric(n))
-      P   <- diag(d) + crossprod(A) / epsilon^2          # precision
-      m   <- as.vector(solve(P, crossprod(A, y) / epsilon^2))
-      R   <- chol(P)                                     # P = R'R
+      d <- n + length(theta)
+      if (is.null(gcache$theta) || length(theta) != length(gcache$theta) ||
+          any(theta != gcache$theta)) {            # rebuild A'A, A'y for new theta
+        A <- vapply(seq_len(d), function(j) {
+          e <- numeric(d); e[j] <- 1; ma_transform(e, theta)
+        }, numeric(n))
+        gcache$theta <- theta
+        gcache$AtA   <- crossprod(A)
+        gcache$Aty   <- as.vector(crossprod(A, y))
+      }
+      P <- diag(d) + gcache$AtA / epsilon^2              # precision
+      m <- as.vector(solve(P, gcache$Aty / epsilon^2))
+      R <- chol(P)                                       # P = R'R
       lapply(seq_len(n_draws), function(i) m + backsolve(R, rnorm(d)))
     }
   )
